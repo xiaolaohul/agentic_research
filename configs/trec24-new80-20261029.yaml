@@ -1,0 +1,51 @@
+dataset:
+  name: trec-rag-2024-fixed-corpus-new80
+  corpus: data/experiments/trec24-new80-20261029/corpus.jsonl
+  queries: data/experiments/trec24-new80-20261029/queries.jsonl
+  qrels: data/experiments/trec24-new80-20261029/qrels.tsv
+  manifest: data/experiments/trec24-new80-20261029/manifest.json
+  raw_dir: data/raw
+  max_documents: 10000
+  max_queries: 80
+  pool_scope: all
+  seed: 42
+  topics_url: https://trec.nist.gov/data/rag/topics.rag24.test.txt
+  qrels_url: https://trec-rag.github.io/assets/txt/qrels.rag24.test-umbrela-all.txt
+  judgments: UMBRELA automated segment relevance, TREC RAG 2024
+retrieval:
+  candidate_k: 100
+  context_k: 5
+  display_k: 10
+  index_dir: indexes
+  bm25:
+    k1: 0.9
+    b: 0.4
+    stem: true
+  bge:
+    model: BAAI/bge-base-en-v1.5
+    revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+    device: cuda
+    batch_size: 16
+    max_length: 512
+    query_instruction: 'Represent this sentence for searching relevant passages: '
+reranker:
+  model: BAAI/bge-reranker-v2-m3
+  revision: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+  device: cuda
+  batch_size: 4
+  max_length: 512
+  fp16: true
+evaluation:
+  ks:
+  - 5
+  - 10
+  - 20
+  - 100
+  relevant_threshold: 1
+  gain: linear
+storage:
+  budget_gib: 40
+  reserve_gib: 20
+  model_cache: models/huggingface
+  hf_endpoint: https://huggingface.co
+results_dir: results

@@ -1,0 +1,10 @@
+numpy>=1.24,<3
+PyYAML>=6,<7
+bm25s>=0.2.14,<0.4
+PyStemmer>=2.2,<4
+faiss-cpu>=1.8,<2
+sentence-transformers>=3.3,<6
+transformers>=4.45,<5
+huggingface-hub>=0.26,<1
+requests>=2.32,<3
+# Install CUDA-enabled torch separately; see README.md.

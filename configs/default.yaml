@@ -1,0 +1,52 @@
+dataset:
+  name: trec-rag-2024-subset
+  corpus: data/processed/corpus.jsonl
+  queries: data/processed/queries.jsonl
+  qrels: data/processed/qrels.tsv
+  manifest: data/subsets/manifest.json
+  raw_dir: data/raw
+  max_documents: 10000
+  max_queries: 20
+  # Share a fixed corpus sampled from all published topics, not just the evaluated 20.
+  pool_scope: all
+  seed: 42
+  # This is a segment-level, model-assessed qrels set, NOT manual NIST doc qrels.
+  topics_url: https://trec.nist.gov/data/rag/topics.rag24.test.txt
+  qrels_url: https://trec-rag.github.io/assets/txt/qrels.rag24.test-umbrela-all.txt
+  judgments: UMBRELA automated segment relevance, TREC RAG 2024
+retrieval:
+  candidate_k: 100
+  context_k: 5
+  display_k: 10
+  index_dir: indexes
+  bm25:
+    k1: 0.9
+    b: 0.4
+    stem: true
+  bge:
+    model: BAAI/bge-base-en-v1.5
+    revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+    device: cuda
+    batch_size: 16
+    max_length: 512
+    query_instruction: 'Represent this sentence for searching relevant passages: '
+reranker:
+  depth: 100
+  model: BAAI/bge-reranker-v2-m3
+  revision: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+  device: cuda
+  batch_size: 4
+  max_length: 512
+  fp16: true
+evaluation:
+  ks: [5, 10, 20, 100]
+  relevant_threshold: 1
+  # Ideal ranking uses all judged positives within the shared searchable corpus.
+  ndcg_scope: corpus
+  gain: linear
+storage:
+  budget_gib: 40
+  reserve_gib: 20
+  model_cache: models/huggingface
+  hf_endpoint: https://huggingface.co
+results_dir: results
