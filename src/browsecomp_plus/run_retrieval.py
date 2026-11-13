@@ -14,6 +14,10 @@ from .evaluation import QRELS_FILES, load_judgments, score_rankings, write_run
 from ..utils import ROOT, digest, read_json, utc_now, versions, write_json
 
 
+BASELINE_NAMES = {'bm25': 'bm25-baseline', 'bge': 'bge-m3-4096-baseline',
+                  'bm25_rerank': 'bm25-rerank-512-baseline', 'bge_rerank': 'bge-rerank-512-baseline'}
+
+
 def configure_java() -> str:
     java_home = ROOT / 'tools' / 'java21'
     java_bin = java_home / 'bin'
@@ -25,7 +29,11 @@ def configure_java() -> str:
 
 
 def run_baseline(output: Path, *, method: str = 'bm25', index_dir: Path | None = None,
-                 device: str = 'cpu', query_limit: int | None = None) -> None:
+                 device: str = 'cpu', query_limit: int | None = None,
+                 reranker_url: str | None = None, source_run: Path | None = None) -> None:
+    base_method, reranking, _ = method.partition('_rerank')
+    if not reranking and (reranker_url is not None or source_run is not None):
+        raise ValueError('--reranker-url and --source-run require a reranking method.')
     output = output.resolve()
     if output.exists():
         raise FileExistsError(f'Output already exists: {output}')
@@ -37,13 +45,13 @@ def run_baseline(output: Path, *, method: str = 'bm25', index_dir: Path | None =
     depth = 100
     comparison = None
 
-    if method == 'bm25_rerank':
-        from .reranking import compare_rankings, load_saved_bm25, rerank_candidates, write_rank_changes
+    if reranking:
+        from .reranking import compare_rankings, load_saved_candidates, rerank_candidates, write_rank_changes
 
         if index_dir is not None:
-            raise ValueError('BM25 reranking uses the saved BM25 baseline rankings.')
+            raise ValueError('Reranking reads saved candidates. Select them with --source-run.')
         revisions = benchmark_revisions(data_dir, ('benchmark', 'corpus'))
-        description = 'Saved official BM25 results reranked with BGE reranker v2 M3'
+        description = f'Saved {base_method.upper()} results reranked with BGE reranker v2 M3'
         software = versions()
         ranker = 'BGE reranker'
     elif method == 'bm25':
@@ -74,18 +82,21 @@ def run_baseline(output: Path, *, method: str = 'bm25', index_dir: Path | None =
         if not 1 <= query_limit < len(queries):
             raise ValueError(f'Choose a query limit between 1 and {len(queries) - 1}.')
         queries = queries[:query_limit]
-    if method == 'bm25_rerank':
-        source = ROOT / 'results' / 'browsecomp-plus' / 'bm25-baseline'
+    if reranking:
+        source = source_run or ROOT / 'results' / 'browsecomp-plus' / BASELINE_NAMES[base_method]
         read_start = perf_counter()
-        candidates, source_metadata = load_saved_bm25(source, queries, revisions['benchmark'], depth)
+        candidates, source_metadata = load_saved_candidates(
+            source, queries, revisions, depth, base_method, require_full=query_limit is None)
         read_seconds = perf_counter() - read_start
         document_count = source_metadata['index_document_count']
         index_dir = ROOT / source_metadata['index']
-        print(f'Replaying {len(queries)} questions with {depth} saved BM25 hits each.', flush=True)
-        rankings, config, times, timing = rerank_candidates(data_dir / 'corpus', queries, candidates, device, depth)
+        print(f'Replaying {len(queries)} questions with {min(depth, document_count)} saved '
+              f'{base_method.upper()} hits each.', flush=True)
+        rankings, config, times, timing = rerank_candidates(
+            data_dir / 'corpus', queries, candidates, device, depth, reranker_url=reranker_url)
         timing['candidate_read_seconds'] = read_seconds
-        method_settings = {'source_run': source.relative_to(ROOT).as_posix(),
-                           'source_run_sha256': source_metadata['outputs_sha256']['bm25.run'],
+        method_settings = {'source_run': (source.relative_to(ROOT) if source.is_relative_to(ROOT) else source).as_posix(),
+                           'source_run_sha256': source_metadata['outputs_sha256'][f'{base_method}.run'],
                            'reranker': config}
     else:
         print(f'Loaded {len(queries)} queries and both qrels sets for {document_count:,} documents.', flush=True)
@@ -108,10 +119,10 @@ def run_baseline(output: Path, *, method: str = 'bm25', index_dir: Path | None =
         metrics = {name: score_rankings(rankings, labels) for name, labels in judgments.items()}
         write_json(stage / 'metrics.json', metrics)
         artifacts = ['queries.tsv', run_file, 'metrics.json']
-        if method == 'bm25_rerank':
-            comparison = compare_rankings(candidates, metrics, judgments, times)
+        if reranking:
+            comparison = compare_rankings(candidates, metrics, judgments, times, base_method)
             write_json(stage / 'comparison.json', comparison)
-            write_rank_changes(stage / 'rank_changes.tsv', rankings)
+            write_rank_changes(stage / 'rank_changes.tsv', rankings, base_method)
             artifacts.extend(('comparison.json', 'rank_changes.tsv'))
         write_json(stage / 'run.json', {
             'method': method,
@@ -148,21 +159,28 @@ def run_baseline(output: Path, *, method: str = 'bm25', index_dir: Path | None =
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--method', choices=('bm25', 'bge', 'bm25_rerank'), default='bm25')
+    parser.add_argument('--method', choices=tuple(BASELINE_NAMES), default='bm25')
     parser.add_argument('--index-dir', type=Path)
+    parser.add_argument('--source-run', type=Path, help='Saved retrieval result directory for reranking.')
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--device', default='cpu', help='Device for BGE query encoding or reranking.')
     parser.add_argument('--query-limit', type=int, help='Use the first N queries for a smoke run.')
+    parser.add_argument('--reranker-url', help='Local HTTP address of the AutoDL reranker SSH tunnel.')
     args = parser.parse_args()
+    if not args.method.endswith('_rerank') and (args.reranker_url is not None or args.source_run is not None):
+        parser.error('--reranker-url and --source-run require a reranking method')
     output = args.output_dir
     if output is None:
-        name = {'bm25': 'bm25-baseline', 'bge': 'bge-m3-4096-baseline',
-                'bm25_rerank': 'bm25-rerank-512-baseline'}[args.method]
+        name = BASELINE_NAMES[args.method]
+        if args.reranker_url is not None:
+            name = name.replace('-baseline', '-autodl-baseline')
         if args.query_limit is not None:
             name = name.replace('-baseline', f'-smoke-{args.query_limit}')
         output = ROOT / 'results' / 'browsecomp-plus' / name
     index = (ROOT / args.index_dir).resolve() if args.index_dir is not None else None
-    run_baseline(ROOT / output, method=args.method, index_dir=index, device=args.device, query_limit=args.query_limit)
+    source = (ROOT / args.source_run).resolve() if args.source_run is not None else None
+    run_baseline(ROOT / output, method=args.method, index_dir=index, device=args.device,
+                 query_limit=args.query_limit, reranker_url=args.reranker_url, source_run=source)
 
 
 if __name__ == '__main__':
